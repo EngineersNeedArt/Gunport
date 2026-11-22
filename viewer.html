@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Gunport model viewer</title>
+	<style>
+		html, body {
+			margin: 0;
+			padding: 0;
+			overflow: hidden;
+			background: black;
+		}
+
+		canvas {
+			display: block;
+		}
+	</style>
+</head>
+<body>
+	<!--
+		Model viewer. Shows models/fighter.json by default; for another model add
+		?model=<path>, e.g. viewer.html?model=models/bezel.json
+		Needs the dev server (tools/serve.py), like the game.
+	-->
+	<canvas id="screen"></canvas>
+
+	<script type="module" src="viewer.js"></script>
+</body>
+</html>
