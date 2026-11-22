@@ -9,7 +9,7 @@
 
 import { Bolt, add, sub, scale, normalize } from './bolt.js';
 
-const FIRE_INTERVAL = 0.14;		// seconds between pairs while the trigger is held
+const FIRE_INTERVAL = 0.28;		// seconds between pairs while the trigger is held
 const CONVERGE = 45;			// distance at which the four streams meet
 const BOLT_STYLE = {
 	speed: 160,					// world units per second

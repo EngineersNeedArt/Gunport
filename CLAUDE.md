@@ -15,6 +15,25 @@ A retro first-person turret-gunner game for the web: you sit in a gun turret loo
 
 The game imports `../Phosphor3D/*.js` directly, so **both repos must be cloned into the same parent folder**. The game uses Phosphor3D features added during this work (hidden edges, billboard faces, per-face colours, `Camera.projectViewPoints`), so Phosphor3D must be up to date too.
 
+## Working across two machines
+
+The owner works on this project from two Macs, with GitHub as the shared copy. Conversation history and Claude's memory don't travel between machines; this file and the repos do.
+
+- **At the start of a session:** `git pull` in both `Gunport` and `../Phosphor3D` before doing anything else. If either has uncommitted local changes, say so and ask before pulling.
+- **When the owner wraps up for the day or says they're switching machines:**
+  1. Update the "Where things stand" section below: what was done, what's in progress, what's next.
+  2. Commit and push both repos (Phosphor3D only if it changed).
+  3. Confirm both are pushed and clean.
+
+### Where things stand
+
+Feature-complete for a first release; polishing toward 1.0. As of 2026-11-21:
+
+- **Done today (second machine):** difficulty pass. Our fire rate halved, enemy hits do triple damage, three waves of four with enemy fire speeding up each wave, a "WAVE n" banner, and a white bezel flash on each hit. Details under "Game rules and tuning knobs".
+- **Playtest:** the owner played four games: lost, won at 100% hull, lost, won at 4%. Close games that swing both ways, which the owner enjoyed; leave the tuning alone unless asked.
+- **Next session (planned to wrap up 1.0):** a "targeting computer" that replaces the small edge triangles showing where off-screen enemies are (`drawOffscreenArrow` in `main.js`). Design not discussed yet: ask the owner how it should look and behave before building.
+- Also open: the ideas at the end of this file.
+
 ## Running it
 
 ES modules need HTTP, not `file://`. From anywhere:
@@ -74,7 +93,7 @@ There's no build step, package manager or test suite. Changes are checked by sma
 | `main.js` | Setup, input (arrows/WASD, joystick-style mouse, Space/click to fire), combat, hull/damage, intro, game states, drawing, HUD, main loop |
 | `turret.js` | Pan/tilt limited to ±70° each (`PAN_LIMIT`, `TILT_LIMIT`), easing to a stop at the limits; `viewMatrix`, `gunMatrix`, `cockpitMatrix`, `axes()` |
 | `fighter.js` | Enemy flight: arrives 200 units out (`ARRIVAL_DISTANCE`) flying inward, then waypoints in front of the ship (loiter 35–130 units out, or a close strafing pass), turning at a limited rate; 2 hits to destroy |
-| `wing.js` | One game = 4 fighters, arriving 4 s apart, no replacements |
+| `wing.js` | One game = 3 waves of 4 fighters, 4 s apart within a wave; no replacements; the next wave comes 3 s after one is cleared |
 | `guns.js` | Our cannon fire: pairs alternating top/bottom from the barrel tips, converging 45 units out |
 | `bolt.js` | A laser bolt (ours or theirs) as glow and core line models; swept hit test; shared vector helpers |
 | `enemyfire.js` | Fighters fire bursts of green bolts when lined up on us; aim spread decides hits and misses |
@@ -91,10 +110,11 @@ There's no build step, package manager or test suite. Changes are checked by sma
 
 ## Game rules and tuning knobs (current values)
 
-- **Wing:** 4 fighters, 4 s apart (`new Wing({ size: 4, interval: 4 })` in `main.js`). Shoot all four down for VICTORY; at 0% hull it's SHIP DESTROYED. Enter or a click starts a new game.
-- **Hull:** 100 points, 2 per enemy hit (`HIT_DAMAGE` in `main.js`). Each hit brings a flash, a cockpit jolt and a sound.
-- **Enemy fire** (`enemyfire.js`): fires from 10–90 units when its nose is within 15° of us, in bursts of 3 pairs, pausing 3–6 s. Aim spread 8 against a ship radius of 3, so about 3 in 8 hit.
-  - Simulation (not play) put it at about 90 s of hull against all four if you never shoot back. The owner may have tuned these since; read the file.
+- **Wing:** 3 waves of 4 fighters, 4 s apart, the next wave 3 s after one is cleared (`new Wing({ waves: 3, size: 4, interval: 4, pause: 3 })` in `main.js`). A "WAVE n" / "FINAL WAVE" banner shows as each begins. Clear all three for VICTORY; at 0% hull it's SHIP DESTROYED. Enter or a click starts a new game.
+- **Our fire rate:** one pair every 0.28 s while the trigger is held (`FIRE_INTERVAL` in `guns.js`); a fresh press fires at once.
+- **Hull:** 100 points, 6 per enemy hit, so 17 hits to lose (`HIT_DAMAGE` in `main.js`). Each hit brings a screen flash, the bezel lit white for 1/30 s (`BEZEL_FLASH_TIME`), a cockpit jolt and a sound.
+- **Enemy fire** (`enemyfire.js`): fires from 10–90 units when its nose is within 15° of us, in bursts of 3 pairs, pausing 3–6 s times `pauseScale`, which `main.js` sets per wave from `WAVE_FIRE_PAUSE` = [1, 0.7, 0.5], so later waves fire more often. Aim spread 8 against a ship radius of 3, so about 3 in 8 hit.
+  - Simulation (not play) put it at about 30 s of hull against all four if you never shoot back. The owner may have tuned these since; read the file.
 - **Sound volumes** are set where each sound is played, in `main.js`. Explosions play at full volume at any distance; our laser plays at 0.18.
 
 ## History, briefly
@@ -115,10 +135,10 @@ Built up in one long session:
 13. sound, then the owner's recordings
 14. fireballs
 15. a fixed wing of four with win and lose screens
+16. (second machine) slower fire rate, triple hull damage, three waves with faster enemy fire, bezel hit flash
 
 A ring of hull "skyline" panels was tried and removed: the owner decided the ship's own hull wouldn't be visible from the turret.
 
 Ideas raised but not done:
 - a lead marker on the HUD
 - a muzzle flash at the barrel tips
-- difficulty that ramps up across waves

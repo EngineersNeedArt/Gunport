@@ -18,7 +18,8 @@ const FIRE_RANGE = [10, 90];			// only shoots from between these distances
 const FACING = Math.cos(15 * DEG);		// only shoots with its nose within 15° of us
 const BURST = 3;						// pairs per burst
 const BURST_INTERVAL = 0.16;			// seconds between pairs in a burst
-const PAUSE = [3.0, 6.0];				// seconds between bursts, min..max (four fighters share the sky)
+const PAUSE = [3.0, 6.0];				// seconds between bursts, min..max (four fighters share the sky),
+										// times pauseScale
 const GUN_OFFSET = { side: 0.3, down: 0.35, ahead: 0.6 };	// guns, relative to the fighter's centre
 
 const BOLT_STYLE = {
@@ -31,6 +32,8 @@ const BOLT_STYLE = {
 
 export class EnemyFire {
 	bolts = [];
+	// Scales the pause between bursts: below 1, the fighters fire more often.
+	pauseScale = 1;
 	// Called with the fighter's position each time a fighter fires a pair (for sound).
 	onFire = null;
 	#guns = new Map();		// fighter -> { pause, shotsLeft, shotTimer }
@@ -80,7 +83,7 @@ export class EnemyFire {
 	#updateFighter(fighter, dt) {
 		let gun = this.#guns.get(fighter);
 		if (!gun) {
-			gun = { pause: between(PAUSE), shotsLeft: 0, shotTimer: 0 };
+			gun = { pause: between(PAUSE) * this.pauseScale, shotsLeft: 0, shotTimer: 0 };
 			this.#guns.set(fighter, gun);
 		}
 
@@ -92,7 +95,7 @@ export class EnemyFire {
 				gun.shotsLeft--;
 				gun.shotTimer = BURST_INTERVAL;
 				if (gun.shotsLeft === 0) {
-					gun.pause = between(PAUSE);
+					gun.pause = between(PAUSE) * this.pauseScale;
 				}
 			}
 			return;

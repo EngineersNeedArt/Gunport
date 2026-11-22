@@ -45,7 +45,7 @@ const enemyFire = new EnemyFire(worldFrame);
 const vary = (amount) => 1 + (Math.random() * 2 - 1) * amount;
 guns.onFire = (pair) => {
 	cannon?.recoil(pair);
-	sound.play('laser', { volume: 0.18, rate: vary(0.05) });	// fires ~7 pairs/s, so copies overlap
+	sound.play('laser', { volume: 0.18, rate: vary(0.05) });	// fires ~3.5 pairs/s, so copies may overlap
 };
 enemyFire.onFire = (position) => sound.play('enemyLaser', { position, volume: 0.9, rate: vary(0.06) });
 
@@ -60,18 +60,32 @@ Promise.all([loadJSON('models/cannon-body.json'), loadJSON('models/cannon-barrel
 	})
 	.catch((error) => console.error(error));
 
+let bezel = null;
+let bezelFill = null;		// the model's own fill, restored after a hit's flash
+
 loadModel('models/bezel.json', cockpitFrame)
-	.then((model) => cockpitModels.push(model))
+	.then((model) => {
+		bezel = model;
+		bezelFill = model.fill;
+		cockpitModels.push(model);
+	})
 	.catch((error) => console.error(error));
 
 // --- Combat -----------------------------------------------------------------
 
-// A game is one wing of four fighters, arriving 4 seconds apart, far out (see
-// wing.js). Shoot all four down to win.
-const wing = new Wing({ size: 4, interval: 4 });
+// A game is three waves of four fighters, arriving 4 seconds apart, far out
+// (see wing.js). Shoot down a whole wave and the next arrives 3 seconds later;
+// clear all three to win.
+const wing = new Wing({ waves: 3, size: 4, interval: 4, pause: 3 });
+// Each wave fires more often: the pause between a fighter's bursts is scaled
+// by this (wave 1, 2, 3).
+const WAVE_FIRE_PAUSE = [1, 0.7, 0.5];
+const BANNER_TIME = 2.5;		// seconds "WAVE n" shows as a wave begins
 const explosions = [];
 let fighterJSON = null;		// loaded once; each fighter gets its own copy
 let kills = 0;
+let bannerWave = 0;			// the wave the banner last announced
+let bannerTime = 0;
 
 loadJSON('models/fighter.json')
 	.then((json) => {
@@ -100,7 +114,7 @@ function updateCombat(dt) {
 			kills += 1;
 		}
 	}
-	if (gameState === 'playing' && wing.allSent && fighters.length === 0) {
+	if (gameState === 'playing' && wing.finished && fighters.length === 0) {
 		gameState = 'won';
 		updateInput();	// lets go of the trigger
 	}
@@ -114,10 +128,21 @@ function updateCombat(dt) {
 		}
 	}
 
-	// The wing arrives one fighter at a time.
-	if (fighterJSON && gameState === 'playing' && wing.update(dt)) {
-		if (wing.sent === 1) {
-			// The first, just above where you're looking.
+	// The wing arrives one fighter at a time, a wave at a time.
+	bannerTime = Math.max(0, bannerTime - dt);
+	if (!fighterJSON || gameState !== 'playing') {
+		return;
+	}
+	const arrives = wing.update(dt, fighters.length);
+	if (wing.wave !== bannerWave) {
+		// A new wave (it may still be on its way): announce it, and fire faster.
+		bannerWave = wing.wave;
+		bannerTime = BANNER_TIME;
+		enemyFire.pauseScale = WAVE_FIRE_PAUSE[Math.min(wing.wave, WAVE_FIRE_PAUSE.length) - 1];
+	}
+	if (arrives) {
+		if (wing.wave === 1 && wing.sent === 1) {
+			// The game's first, just above where you're looking.
 			spawnFighter(turret.yaw, turret.pitch + 8 * Math.PI / 180);
 		} else {
 			// The rest, anywhere in the turret's reach (follow the arrow).
@@ -132,16 +157,19 @@ function updateCombat(dt) {
 // and jolts the cockpit (bezel and cannon); at zero the ship is lost.
 
 const HULL_MAX = 100;
-const HIT_DAMAGE = 2;			// hull points per enemy bolt (50 hits to lose the ship)
+const HIT_DAMAGE = 6;			// hull points per enemy bolt (17 hits to lose the ship)
 const SHAKE_TIME = 0.35;		// seconds a hit's jolt lasts
 const SHAKE_SIZE = 0.05;		// how far the cockpit jolts (world units; the bezel is 2 out)
 const FLASH_TIME = 0.25;		// seconds a hit's flash lasts
+const BEZEL_FLASH_TIME = 1 / 30;	// seconds the window bezel is lit white by a hit (always at least one frame)
+const BEZEL_FLASH_FILL = 'rgb(255, 255, 255)';
 const LOW_HULL = 30;			// at or below this, the hull readout turns orange
 
 let hull = HULL_MAX;
 let gameState = 'playing';	// 'playing', 'lost' (hull gone) or 'won' (all fighters down)
 let shakeTime = 0;
 let flashTime = 0;
+let bezelFlashTime = 0;		// seconds left of the bezel's white flash
 let shakeOffset = [0, 0];		// this frame's jolt, shared by everything in the cockpit
 
 function damageShip(hits) {
@@ -151,6 +179,7 @@ function damageShip(hits) {
 	hull = Math.max(0, hull - hits * HIT_DAMAGE);
 	shakeTime = SHAKE_TIME;
 	flashTime = FLASH_TIME;
+	bezelFlashTime = BEZEL_FLASH_TIME;
 	sound.play('hullHit', { volume: 0.9, rate: vary(0.08) });
 	if (hull === 0) {
 		gameState = 'lost';
@@ -168,6 +197,7 @@ function newGame() {
 	guns.bolts = [];
 	enemyFire.clear();
 	wing.reset();
+	bannerWave = 0;		// announces wave 1 (and resets the fire rate)
 	updateInput();
 }
 
@@ -429,7 +459,7 @@ function drawHUD(frameRate) {
 	ctx.font = '16px ui-monospace, Menlo, monospace';
 	ctx.fillStyle = PHOSPHOR_GREEN;
 	ctx.textAlign = 'left';
-	const status = `PAN ${angle(turret.yaw, 'L', 'R')}  TILT ${angle(turret.pitch, 'D', 'U')}   KILLS ${kills}/${wing.size}   `;
+	const status = `PAN ${angle(turret.yaw, 'L', 'R')}  TILT ${angle(turret.pitch, 'D', 'U')}   WAVE ${wing.wave}/${wing.waves}  KILLS ${String(kills).padStart(2, ' ')}/${wing.total}   `;
 	const hullText = `HULL ${String(hull).padStart(3, ' ')}%`;
 	const controls = `FIRE [SPACE/CLICK]   SOUND ${sound.enabled ? 'ON ' : 'OFF'} [N]   MOUSE ${mouse.enabled ? 'ON ' : 'OFF'} [M]   ${frameRate} FPS`;
 	const bottom = canvas.height - 16;
@@ -452,6 +482,21 @@ function drawHitFlash() {
 	}
 }
 
+// "WAVE n" above the reticle as a wave begins, fading out.
+function drawWaveBanner() {
+	if (bannerTime <= 0 || gameState !== 'playing') {
+		return;
+	}
+	const fade = Math.min(1, bannerTime / 0.5);		// fades over the last half second
+	ctx.globalAlpha = fade;
+	ctx.textAlign = 'center';
+	ctx.fillStyle = PHOSPHOR_GREEN;
+	ctx.font = '32px ui-monospace, Menlo, monospace';
+	const text = wing.wave === wing.waves ? `FINAL WAVE` : `WAVE ${wing.wave}`;
+	ctx.fillText(text, canvas.width / 2, canvas.height * 0.3);
+	ctx.globalAlpha = 1;
+}
+
 // End of a game: lost (hull gone) or won (all fighters down).
 function drawEndScreen() {
 	if (gameState === 'playing') {
@@ -466,7 +511,7 @@ function drawEndScreen() {
 	ctx.fillText(won ? 'VICTORY' : 'SHIP DESTROYED', canvas.width / 2, canvas.height / 2 - 10);
 	ctx.fillStyle = PHOSPHOR_GREEN;
 	ctx.font = '18px ui-monospace, Menlo, monospace';
-	const result = won ? `ALL ${wing.size} FIGHTERS DESTROYED   HULL ${hull}%` : `KILLS ${kills}/${wing.size}`;
+	const result = won ? `ALL ${wing.total} FIGHTERS DESTROYED   HULL ${hull}%` : `WAVE ${wing.wave}/${wing.waves}   KILLS ${kills}/${wing.total}`;
 	ctx.fillText(`${result}   —   PRESS ENTER OR CLICK TO FLY AGAIN`, canvas.width / 2, canvas.height / 2 + 30);
 }
 
@@ -510,6 +555,11 @@ function frame(now) {
 	if (cannon) {
 		drawModels(ctx, camera, cannon.models);
 	}
+	// A hit lights the window bezel white for a moment.
+	if (bezel) {
+		bezel.fill = bezelFlashTime > 0 ? BEZEL_FLASH_FILL : bezelFill;
+		bezelFlashTime = Math.max(0, bezelFlashTime - dt);	// counted down after it's applied, so a hit always shows for a frame
+	}
 	drawModels(ctx, camera, cockpitModels);
 	drawReticle();
 	for (const fighter of fighters) {
@@ -519,6 +569,7 @@ function frame(now) {
 	drawHitFlash();
 
 	fps.endFrame();
+	drawWaveBanner();
 	drawHUD(fps.fps());
 	drawEndScreen();
 
