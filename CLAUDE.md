@@ -19,11 +19,11 @@ The game imports `../Phosphor3D/*.js` directly, so **both repos must be cloned i
 
 The owner works on this project from two Macs, with GitHub as the shared copy. Conversation history and Claude's memory don't travel between machines; this file and the repos do.
 
-- **At the start of a session:** `git pull` in both `Gunport` and `../Phosphor3D` before doing anything else. If either has uncommitted local changes, say so and ask before pulling.
+- **The owner does all git pulling, committing and pushing.** Don't run `git pull`, `commit` or `push` yourself; just remind them at the right moments.
+- **At the start of a session:** remind the owner to pull both `Gunport` and `../Phosphor3D` if they haven't already.
 - **When the owner wraps up for the day or says they're switching machines:**
   1. Update the "Where things stand" section below: what was done, what's in progress, what's next.
-  2. Commit and push both repos (Phosphor3D only if it changed).
-  3. Confirm both are pushed and clean.
+  2. Remind the owner to commit and push both repos (Phosphor3D only if it changed), and say which files changed in each.
 
 ### Where things stand
 
