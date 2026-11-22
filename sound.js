@@ -25,7 +25,7 @@ const SAMPLE_FILES = {
 	explosion: 'sounds/FighterExplosion.wav',	// a fighter destroyed
 	clank: 'sounds/FighterHit.wav',				// a fighter hit but not destroyed
 	hullHit: 'sounds/ShipHit.wav',				// an enemy bolt hitting our ship
-	engine: null,			// a fighter's engine; LOOPED, so it must loop seamlessly
+	engine: 'sounds/FighterEngine.wav',			// a fighter's engine; LOOPED, so it must loop seamlessly
 };
 
 const MASTER_VOLUME = 0.6;
@@ -97,7 +97,8 @@ export class Sound {
 	 * @param {number} [options.volume] - 0..1 before distance.
 	 * @param {number} [options.rate] - playback speed (1 = as recorded; also shifts pitch).
 	 * @param {number} [options.falloff] - distance at which it's at half volume (bigger
-	 *     carries further); defaults to DISTANCE_REFERENCE.
+	 *     carries further); defaults to DISTANCE_REFERENCE. Infinity: the same volume
+	 *     at any distance (still panned).
 	 */
 	play(name, { position = null, volume = 1, rate = 1, falloff = DISTANCE_REFERENCE } = {}) {
 		if (!this.#context || !this.enabled || !this.#buffers[name]) {
@@ -111,7 +112,7 @@ export class Sound {
 		const panner = ctx.createStereoPanner();
 		if (position) {
 			const distance = Math.hypot(...position);
-			gain.gain.value = volume * falloff / (falloff + distance);
+			gain.gain.value = falloff === Infinity ? volume : volume * falloff / (falloff + distance);
 			panner.pan.value = this.#pan(position);
 		} else {
 			gain.gain.value = volume;
@@ -161,18 +162,37 @@ export class Sound {
 
 	#startEngine() {
 		const ctx = this.#context;
-		const source = ctx.createBufferSource();
-		source.buffer = this.#buffers.engine;
-		source.loop = true;
 		const filter = ctx.createBiquadFilter();
 		filter.type = 'lowpass';
 		const gain = ctx.createGain();
 		gain.gain.value = 0;
 		const panner = ctx.createStereoPanner();
-		source.connect(filter).connect(gain).connect(panner).connect(this.#master);
+		filter.connect(gain).connect(panner).connect(this.#master);
+		const engine = { source: null, filter, gain, panner };
+		this.#startEngineLoop(engine, 1);
+		return engine;
+	}
+
+	// (Re)start an engine's looping sample with the current engine buffer.
+	#startEngineLoop(engine, rate) {
+		const source = this.#context.createBufferSource();
+		source.buffer = this.#buffers.engine;
+		source.loop = true;
+		source.playbackRate.value = rate;
+		source.connect(engine.filter);
 		// Start each loop at a random point so several engines don't sound in unison.
 		source.start(0, Math.random() * source.buffer.duration);
-		return { source, filter, gain, panner };
+		engine.source = source;
+	}
+
+	// A recording finished loading after engines were already running (the first
+	// fighter appears before the file arrives): switch them over to it.
+	#swapEngineLoops() {
+		for (const engine of this.#engines.values()) {
+			const old = engine.source;
+			this.#startEngineLoop(engine, old.playbackRate.value);
+			old.stop();
+		}
 	}
 
 	// -1 (left) .. 1 (right), from where `position` is relative to the aim.
@@ -190,6 +210,9 @@ export class Sound {
 			}
 			this.#buffers[name] = await this.#context.decodeAudioData(await response.arrayBuffer());
 			console.info(`Sound "${name}": using ${path}`);
+			if (name === 'engine') {
+				this.#swapEngineLoops();
+			}
 		} catch (error) {
 			console.warn(`Couldn't load sound ${path} (${error.message}); using the built-in one`);
 		}

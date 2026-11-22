@@ -4,7 +4,7 @@
 // range: a short burst of paired green bolts from just below its cockpit, then a
 // pause before the next burst. Its aim isn't perfect: each pair is aimed at a
 // random point up to MISS_SPREAD from the turret, and only those passing within
-// SHIP_RADIUS hit the ship -- so about half hit, and the rest streak past.
+// SHIP_RADIUS hit the ship -- so about 3 in 8 hit, and the rest streak past.
 //
 // World coordinates match the turret: +x right, +y up, +z straight out, with
 // the turret (and our ship) at the origin.
@@ -13,12 +13,12 @@ import { Bolt, add, sub, scale, length, normalize, cross } from './bolt.js';
 
 const DEG = Math.PI / 180;
 const SHIP_RADIUS = 3;					// bolts passing this close to the turret hit the ship
-const MISS_SPREAD = 6;					// aim error, up to this far from the turret (uniform in radius)
+const MISS_SPREAD = 8;					// aim error, up to this far from the turret (uniform in radius)
 const FIRE_RANGE = [10, 90];			// only shoots from between these distances
 const FACING = Math.cos(15 * DEG);		// only shoots with its nose within 15° of us
 const BURST = 3;						// pairs per burst
 const BURST_INTERVAL = 0.16;			// seconds between pairs in a burst
-const PAUSE = [1.2, 3.0];				// seconds between bursts, min..max
+const PAUSE = [3.0, 6.0];				// seconds between bursts, min..max (four fighters share the sky)
 const GUN_OFFSET = { side: 0.3, down: 0.35, ahead: 0.6 };	// guns, relative to the fighter's centre
 
 const BOLT_STYLE = {

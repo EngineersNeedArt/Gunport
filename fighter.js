@@ -25,6 +25,8 @@ const FLASH_COLOR = 'rgb(255, 255, 255)';
 const FIELD_PAN = 55 * DEG;		// left / right
 const FIELD_TILT = 45 * DEG;	// up / down
 const LOITER_RANGE = [35, 130];	// world units from the turret, min..max
+const ARRIVAL_DISTANCE = 200;	// fighters arrive this far out (a speck), then fly in
+const ARRIVAL_ANGLE = 25 * DEG;	// ...heading up to this far off straight at us
 
 export class Fighter {
 	position = [0, 0, 0];
@@ -39,15 +41,19 @@ export class Fighter {
 
 	/**
 	 * @param {Model3D} model - drawn at the fighter's position and heading.
-	 * @param {number} startHeading - turret pan (radians, + right) to appear near.
-	 * @param {number} startElevation - turret tilt (radians, + up) to appear near.
+	 * @param {number} startHeading - turret pan (radians, + right) to arrive at.
+	 * @param {number} startElevation - turret tilt (radians, + up) to arrive at.
 	 */
 	constructor(model, startHeading = 0, startElevation = 0) {
 		this.model = model;
 		this.#stroke = model.stroke;
-		// Start far out, flying across the view so it's easy to spot.
-		this.position = fromAngles(startHeading, startElevation, 55);
-		this.direction = normalize([Math.cos(startHeading), 0.1, -Math.sin(startHeading)]);
+		// Arrive far out, a speck in the distance, flying in toward us (not quite
+		// straight at us) before swinging off to its first waypoint.
+		this.position = fromAngles(startHeading, startElevation, ARRIVAL_DISTANCE);
+		const inward = normalize(this.position.map((v) => -v));
+		const sideways = normalize(cross(inward, [Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]));
+		const off = Math.random() * ARRIVAL_ANGLE;
+		this.direction = normalize(inward.map((v, i) => v * Math.cos(off) + sideways[i] * Math.sin(off)));
 		this.#pickWaypoint();
 		this.#syncModel();
 	}
@@ -136,6 +142,10 @@ function fromAngles(heading, elevation, distance) {
 
 function sub(a, b) {
 	return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function cross(a, b) {
+	return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }
 
 function length(v) {

@@ -11,6 +11,7 @@ import { Explosion } from './explosion.js';
 import { Cannon } from './cannon.js';
 import { EnemyFire } from './enemyfire.js';
 import { Sound } from './sound.js';
+import { Wing } from './wing.js';
 
 const PHOSPHOR_GREEN = '#33ff66';
 const WARNING_ORANGE = '#ffaa33';
@@ -65,16 +66,16 @@ loadModel('models/bezel.json', cockpitFrame)
 
 // --- Combat -----------------------------------------------------------------
 
-const RESPAWN_DELAY = 2.5;	// seconds after a kill before the next fighter appears
+// A game is one wing of four fighters, arriving 4 seconds apart, far out (see
+// wing.js). Shoot all four down to win.
+const wing = new Wing({ size: 4, interval: 4 });
 const explosions = [];
 let fighterJSON = null;		// loaded once; each fighter gets its own copy
 let kills = 0;
-let respawnTimer = -1;		// counting down while waiting to respawn; -1 = not waiting
 
 loadJSON('models/fighter.json')
 	.then((json) => {
 		fighterJSON = json;
-		spawnFighter(turret.yaw, turret.pitch + 15 * Math.PI / 180);	// the first one appears where you're looking
 	})
 	.catch((error) => console.error(error));
 
@@ -92,13 +93,16 @@ function updateCombat(dt) {
 		if (!fighter.hit()) {
 			sound.play('clank', { position: fighter.position, volume: 0.7, rate: vary(0.1) });
 		} else {
-			// Explosions carry: half volume at 50 units (other sounds: 15).
-			sound.play('explosion', { position: fighter.position, rate: vary(0.1), falloff: 50 });
+			// Explosions play at full volume however far away (panned to where they are).
+			sound.play('explosion', { position: fighter.position, rate: vary(0.1), falloff: Infinity });
 			fighters.splice(fighters.indexOf(fighter), 1);
 			explosions.push(new Explosion(fighter.model, fighter.velocity, worldFrame));
 			kills += 1;
-			respawnTimer = RESPAWN_DELAY;
 		}
+	}
+	if (gameState === 'playing' && wing.allSent && fighters.length === 0) {
+		gameState = 'won';
+		updateInput();	// lets go of the trigger
 	}
 
 	for (const explosion of explosions) {
@@ -110,10 +114,13 @@ function updateCombat(dt) {
 		}
 	}
 
-	if (respawnTimer >= 0) {
-		respawnTimer -= dt;
-		if (respawnTimer < 0 && fighterJSON) {
-			// Anywhere in the turret's reach (follow the arrow).
+	// The wing arrives one fighter at a time.
+	if (fighterJSON && gameState === 'playing' && wing.update(dt)) {
+		if (wing.sent === 1) {
+			// The first, just above where you're looking.
+			spawnFighter(turret.yaw, turret.pitch + 8 * Math.PI / 180);
+		} else {
+			// The rest, anywhere in the turret's reach (follow the arrow).
 			const spread = (limit) => (Math.random() * 2 - 1) * limit;
 			spawnFighter(spread(Turret.PAN_LIMIT * 0.8), spread(Turret.TILT_LIMIT * 0.6));
 		}
@@ -125,20 +132,20 @@ function updateCombat(dt) {
 // and jolts the cockpit (bezel and cannon); at zero the ship is lost.
 
 const HULL_MAX = 100;
-const HIT_DAMAGE = 5;			// hull points per enemy bolt (20 hits to lose the ship)
+const HIT_DAMAGE = 2;			// hull points per enemy bolt (50 hits to lose the ship)
 const SHAKE_TIME = 0.35;		// seconds a hit's jolt lasts
 const SHAKE_SIZE = 0.05;		// how far the cockpit jolts (world units; the bezel is 2 out)
 const FLASH_TIME = 0.25;		// seconds a hit's flash lasts
 const LOW_HULL = 30;			// at or below this, the hull readout turns orange
 
 let hull = HULL_MAX;
-let shipLost = false;
+let gameState = 'playing';	// 'playing', 'lost' (hull gone) or 'won' (all fighters down)
 let shakeTime = 0;
 let flashTime = 0;
 let shakeOffset = [0, 0];		// this frame's jolt, shared by everything in the cockpit
 
 function damageShip(hits) {
-	if (hits === 0 || shipLost) {
+	if (hits === 0 || gameState !== 'playing') {
 		return;
 	}
 	hull = Math.max(0, hull - hits * HIT_DAMAGE);
@@ -146,17 +153,21 @@ function damageShip(hits) {
 	flashTime = FLASH_TIME;
 	sound.play('hullHit', { volume: 0.9, rate: vary(0.08) });
 	if (hull === 0) {
-		shipLost = true;
+		gameState = 'lost';
 		sound.play('explosion', { volume: 1, rate: 0.6 });	// slowed down: deeper, longer
 		updateInput();	// lets go of the trigger
 	}
 }
 
-function restart() {
+// Start over: a full hull and a fresh wing of fighters.
+function newGame() {
 	hull = HULL_MAX;
 	kills = 0;
-	shipLost = false;
+	gameState = 'playing';
+	fighters.length = 0;
+	guns.bolts = [];
 	enemyFire.clear();
+	wing.reset();
 	updateInput();
 }
 
@@ -244,14 +255,14 @@ function updateInput() {
 	turret.pitchInput = pitch;
 
 	// Trigger: Space, or the main mouse button held down over the game.
-	guns.firing = !shipLost && (keys.has('Space') || mouseButtonDown);
+	guns.firing = gameState === 'playing' && (keys.has('Space') || mouseButtonDown);
 }
 
 let mouseButtonDown = false;
 
 canvas.addEventListener('mousedown', (e) => {
-	if (e.button === 0 && shipLost) {
-		restart();
+	if (e.button === 0 && gameState !== 'playing') {
+		newGame();
 		return;
 	}
 	if (e.button === 0) {
@@ -279,18 +290,18 @@ document.addEventListener('keydown', (e) => {
 	if (e.code === 'KeyN' && !e.repeat) {
 		sound.toggle();
 	}
-	if (e.code === 'KeyB' && !e.repeat) {
-		starfield.motionBlur = !starfield.motionBlur;
-	}
 	if (e.code === 'KeyM' && !e.repeat) {
 		mouse.enabled = !mouse.enabled;
 	}
-	if (e.code === 'Enter' && shipLost) {
-		restart();
+	if (e.code === 'Enter' && gameState !== 'playing') {
+		newGame();
 	}
 	keys.add(e.code);
 	updateInput();
 });
+
+// No right-click (or Control-click) menu: in a game, a stray menu just gets in the way.
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 canvas.addEventListener('mousemove', (e) => {
 	const rect = canvas.getBoundingClientRect();
@@ -351,29 +362,13 @@ function drawReticle() {
 	ctx.stroke();
 }
 
-// The system cursor is hidden over the canvas (see index.html); instead draw a
-// small diamond where the pointer is, tied to the centre by a faint line, plus a
-// faint box showing the dead zone, so you can see which way and how hard you're steering.
+// Where the mouse is, as a small diamond (the system pointer is hidden over the game).
 function drawMouseMarker() {
 	if (!mouse.enabled || !mouse.inside) {
 		return;
 	}
-	const cx = canvas.width / 2;
-	const cy = canvas.height / 2;
-	const dzx = MOUSE_DEAD_ZONE * cx;
-	const dzy = MOUSE_DEAD_ZONE * cy;
 	const r = 6;
-
 	ctx.strokeStyle = PHOSPHOR_GREEN;
-	ctx.lineWidth = 1;
-	ctx.globalAlpha = 0.25;
-	ctx.strokeRect(cx - dzx, cy - dzy, dzx * 2, dzy * 2);
-	ctx.beginPath();
-	ctx.moveTo(cx, cy);
-	ctx.lineTo(mouse.x, mouse.y);
-	ctx.stroke();
-	ctx.globalAlpha = 1;
-
 	ctx.lineWidth = 1.5;
 	ctx.beginPath();
 	ctx.moveTo(mouse.x, mouse.y - r);
@@ -434,9 +429,9 @@ function drawHUD(frameRate) {
 	ctx.font = '16px ui-monospace, Menlo, monospace';
 	ctx.fillStyle = PHOSPHOR_GREEN;
 	ctx.textAlign = 'left';
-	const status = `PAN ${angle(turret.yaw, 'L', 'R')}  TILT ${angle(turret.pitch, 'D', 'U')}   KILLS ${kills}   `;
+	const status = `PAN ${angle(turret.yaw, 'L', 'R')}  TILT ${angle(turret.pitch, 'D', 'U')}   KILLS ${kills}/${wing.size}   `;
 	const hullText = `HULL ${String(hull).padStart(3, ' ')}%`;
-	const controls = `FIRE [SPACE/CLICK]   SOUND ${sound.enabled ? 'ON ' : 'OFF'} [N]   MOUSE ${mouse.enabled ? 'ON ' : 'OFF'} [M]   BLUR ${starfield.motionBlur ? 'ON ' : 'OFF'} [B]   ${frameRate} FPS`;
+	const controls = `FIRE [SPACE/CLICK]   SOUND ${sound.enabled ? 'ON ' : 'OFF'} [N]   MOUSE ${mouse.enabled ? 'ON ' : 'OFF'} [M]   ${frameRate} FPS`;
 	const bottom = canvas.height - 16;
 	ctx.fillText(status, 16, bottom);
 	ctx.fillStyle = hull <= LOW_HULL ? WARNING_ORANGE : PHOSPHOR_GREEN;
@@ -457,19 +452,22 @@ function drawHitFlash() {
 	}
 }
 
-function drawShipLost() {
-	if (!shipLost) {
+// End of a game: lost (hull gone) or won (all fighters down).
+function drawEndScreen() {
+	if (gameState === 'playing') {
 		return;
 	}
+	const won = gameState === 'won';
 	ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
 	ctx.fillRect(0, 0, canvas.width, canvas.height);
 	ctx.textAlign = 'center';
-	ctx.fillStyle = WARNING_ORANGE;
+	ctx.fillStyle = won ? PHOSPHOR_GREEN : WARNING_ORANGE;
 	ctx.font = '40px ui-monospace, Menlo, monospace';
-	ctx.fillText('SHIP DESTROYED', canvas.width / 2, canvas.height / 2 - 10);
+	ctx.fillText(won ? 'VICTORY' : 'SHIP DESTROYED', canvas.width / 2, canvas.height / 2 - 10);
 	ctx.fillStyle = PHOSPHOR_GREEN;
 	ctx.font = '18px ui-monospace, Menlo, monospace';
-	ctx.fillText(`KILLS ${kills}   —   PRESS ENTER OR CLICK TO FLY AGAIN`, canvas.width / 2, canvas.height / 2 + 30);
+	const result = won ? `ALL ${wing.size} FIGHTERS DESTROYED   HULL ${hull}%` : `KILLS ${kills}/${wing.size}`;
+	ctx.fillText(`${result}   —   PRESS ENTER OR CLICK TO FLY AGAIN`, canvas.width / 2, canvas.height / 2 + 30);
 }
 
 // --- Main loop --------------------------------------------------------------
@@ -522,7 +520,7 @@ function frame(now) {
 
 	fps.endFrame();
 	drawHUD(fps.fps());
-	drawShipLost();
+	drawEndScreen();
 
 	requestAnimationFrame(frame);
 }
