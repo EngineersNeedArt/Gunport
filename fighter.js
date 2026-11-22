@@ -6,8 +6,9 @@
 //   - loiter points far out (it swings around at a distance), and
 //   - strafing runs that pass close by the gun turret.
 //
-// World coordinates match the turret: +x right, +y up, +z ahead at heading 0,
-// with the turret at the origin. The model's nose points along its own +z.
+// World coordinates match the turret: +x right, +y up, +z straight out from the
+// ship (the middle of the turret's reach), with the turret at the origin. The
+// model's nose points along its own +z.
 
 const DEG = Math.PI / 180;
 
@@ -18,6 +19,12 @@ const HIT_POINTS = 2;			// hits to destroy
 const HIT_RADIUS = 2.0;			// hit sphere around the centre (the wing panels reach ~2.2 out)
 const FLASH_TIME = 0.12;		// seconds the model flashes white when hit
 const FLASH_COLOR = 'rgb(255, 255, 255)';
+// Where waypoints go: within this far of straight out from the turret (inside its
+// ±70° reach, with a margin), so fighters work the space in front of the ship.
+// Turning between waypoints can still carry them out past the edges for a while.
+const FIELD_PAN = 55 * DEG;		// left / right
+const FIELD_TILT = 45 * DEG;	// up / down
+const LOITER_RANGE = [35, 130];	// world units from the turret, min..max
 
 export class Fighter {
 	position = [0, 0, 0];
@@ -32,14 +39,14 @@ export class Fighter {
 
 	/**
 	 * @param {Model3D} model - drawn at the fighter's position and heading.
-	 * @param {number} startHeading - turret heading (radians) to appear near.
+	 * @param {number} startHeading - turret pan (radians, + right) to appear near.
+	 * @param {number} startElevation - turret tilt (radians, + up) to appear near.
 	 */
-	constructor(model, startHeading = 0) {
+	constructor(model, startHeading = 0, startElevation = 0) {
 		this.model = model;
 		this.#stroke = model.stroke;
-		// Start far out, a little above the horizon, where the gun points at first,
-		// flying across the view so it's easy to spot.
-		this.position = fromAngles(startHeading, 15 * DEG, 55);
+		// Start far out, flying across the view so it's easy to spot.
+		this.position = fromAngles(startHeading, startElevation, 55);
 		this.direction = normalize([Math.cos(startHeading), 0.1, -Math.sin(startHeading)]);
 		this.#pickWaypoint();
 		this.#syncModel();
@@ -90,13 +97,15 @@ export class Fighter {
 	}
 
 	#pickWaypoint() {
-		const heading = Math.random() * 2 * Math.PI;
+		const spread = (limit) => (Math.random() * 2 - 1) * limit;
 		if (this.#strafeNext) {
 			// Close pass: aim at a point near the turret, so it flies by at 6-12 units.
-			this.#waypoint = fromAngles(heading, (10 + Math.random() * 50) * DEG, 6 + Math.random() * 6);
+			this.#waypoint = fromAngles(spread(FIELD_PAN * 0.8), spread(FIELD_TILT * 0.8), 6 + Math.random() * 6);
 		} else {
-			// Loiter: somewhere well out, mostly above the horizon.
-			this.#waypoint = fromAngles(heading, (5 + Math.random() * 70) * DEG, 35 + Math.random() * 30);
+			// Loiter: somewhere out in front of the ship, anywhere from fairly close
+			// to far enough to make a small target.
+			const distance = LOITER_RANGE[0] + Math.random() * (LOITER_RANGE[1] - LOITER_RANGE[0]);
+			this.#waypoint = fromAngles(spread(FIELD_PAN), spread(FIELD_TILT), distance);
 		}
 		// Mostly loiter, with a strafing run about one time in three.
 		this.#strafeNext = !this.#strafeNext && Math.random() < 0.5;

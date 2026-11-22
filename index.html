@@ -16,10 +16,77 @@
 			display: block;
 			cursor: none;	/* main.js draws its own pointer marker */
 		}
+
+		/* Intro screen: dismissing it (a click or key) is what lets the browser play sound. */
+		#intro {
+			position: fixed;
+			inset: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: rgba(0, 0, 0, 0.7);
+			color: #33ff66;
+			font-family: ui-monospace, Menlo, monospace;
+			cursor: pointer;
+		}
+
+		#intro.hidden {
+			display: none;
+		}
+
+		#intro .panel {
+			border: 2px solid #33ff66;
+			padding: 32px 48px;
+			background: #000;
+			max-width: 40em;
+			text-align: center;
+		}
+
+		#intro h1 {
+			margin: 0 0 20px;
+			font-size: 40px;
+			letter-spacing: 0.3em;
+			font-weight: normal;
+		}
+
+		#intro table {
+			margin: 0 auto 24px;
+			border-collapse: collapse;
+			text-align: left;
+			line-height: 1.7;
+		}
+
+		#intro td:first-child {
+			padding-right: 24px;
+			color: #aaffbb;
+		}
+
+		#intro .start {
+			animation: blink 1.2s steps(2, start) infinite;
+		}
+
+		@keyframes blink {
+			to { visibility: hidden; }
+		}
 	</style>
 </head>
 <body>
 	<canvas id="screen"></canvas>
+
+	<div id="intro">
+		<div class="panel">
+			<h1>GUNPORT</h1>
+			<p>Hold off the fighters. Lead your shots.<br>Don't let them wear down the hull.</p>
+			<table>
+				<tr><td>Aim</td><td>mouse (like a joystick) or arrow keys / WASD</td></tr>
+				<tr><td>Fire</td><td>hold the mouse button or Space</td></tr>
+				<tr><td>Sound</td><td>N turns it on and off</td></tr>
+				<tr><td>Mouse aiming</td><td>M turns it on and off</td></tr>
+				<tr><td>Motion blur</td><td>B</td></tr>
+			</table>
+			<p class="start">CLICK OR PRESS ANY KEY TO START</p>
+		</div>
+	</div>
 
 	<script type="module" src="main.js"></script>
 </body>

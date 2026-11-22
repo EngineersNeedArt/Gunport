@@ -1,6 +1,9 @@
 // explosion.js -- a destroyed fighter coming apart.
 //
-// Two parts, both ordinary Phosphor3D models so they depth-sort with everything else:
+// Three parts, all ordinary Phosphor3D models so they depth-sort with everything else:
+//   - fireballs: a few glowing discs (billboard faces, so always round) that
+//     balloon out fast then slow down as they fade, drifting on with the fighter's
+//     momentum; bright, faintly green white cooling to green;
 //   - shards: every face of the fighter's model becomes its own tumbling wireframe
 //     piece, flung outward from the centre (and still carrying the fighter's momentum),
 //     fading as it goes;
@@ -18,11 +21,22 @@ const SPARK_LIFE = [0.4, 0.9];		// seconds, min..max
 const SPARK_SPEED = [12, 32];
 const SPARK_LENGTH = 1.6;
 const DEFAULT_RGB = [51, 255, 102];	// shard colour if the model's stroke isn't rgb(...)
+const FIREBALL_COUNT = [3, 5];		// min..max
+const FIREBALL_SIDES = 16;
+const FIREBALL_RADIUS = [1.8, 3.4];	// final radius, world units (the fighter is ~4 across)
+const FIREBALL_LIFE = [0.55, 1.0];	// seconds
+const FIREBALL_DELAY = 0.12;		// later ones start up to this long after the first
+const FIREBALL_SCATTER = 1.0;		// start this far from the centre, at most
+const FIREBALL_DRIFT = 2.5;			// extra outward drift, world units per second
+const FIREBALL_HOT = [235, 255, 215];	// colour when it bursts: white with a tinge of green...
+const FIREBALL_COOL = [60, 210, 90];	// ...cooling to this as it fades
+const FIREBALL_ALPHA = 0.85;		// starting opacity
 
 export class Explosion {
 	time = 0;
 	#shards = [];	// { model, velocity, spin }
 	#sparks = [];	// { model, position, velocity, life }
+	#fireballs = [];	// { model, velocity, delay, life, radius }
 
 	/**
 	 * @param {Model3D} model - the fighter's model, at the moment it was destroyed.
@@ -71,6 +85,29 @@ export class Explosion {
 			});
 		}
 
+		const fireballs = Math.round(between([FIREBALL_COUNT[0] - 0.49, FIREBALL_COUNT[1] + 0.49]));
+		for (let i = 0; i < fireballs; i++) {
+			const fireball = new Model3D();
+			// A unit circle as one billboard face: always turned to the camera, sized by `scale`.
+			fireball.vertices = [];
+			for (let k = 0; k < FIREBALL_SIDES; k++) {
+				const angle = (k / FIREBALL_SIDES) * 2 * Math.PI;
+				fireball.vertices.push([Math.cos(angle), Math.sin(angle), 0, 1]);
+			}
+			fireball.faces2 = [{ vertices: [...fireball.vertices.keys(), 0], billboard: true }];
+			fireball.stroke = null;
+			fireball.parent = worldFrame;
+			const offset = randomDirection().map((v) => v * Math.random() * FIREBALL_SCATTER);
+			[fireball.x, fireball.y, fireball.z] = add(center, offset);
+			this.#fireballs.push({
+				model: fireball,
+				velocity: add(velocity, normalize(offset).map((v) => v * FIREBALL_DRIFT)),
+				delay: i === 0 ? 0 : Math.random() * FIREBALL_DELAY,
+				life: between(FIREBALL_LIFE),
+				radius: between(FIREBALL_RADIUS),
+			});
+		}
+
 		for (let i = 0; i < SPARK_COUNT; i++) {
 			const spark = new Model3D();
 			spark.vertices = [[0, 0, 0, 1], [0, 0, 0, 1]];
@@ -90,6 +127,28 @@ export class Explosion {
 
 	update(dt) {
 		this.time += dt;
+
+		for (const fireball of this.#fireballs) {
+			const m = fireball.model;
+			m.x += fireball.velocity[0] * dt;
+			m.y += fireball.velocity[1] * dt;
+			m.z += fireball.velocity[2] * dt;
+			const age = (this.time - fireball.delay) / fireball.life;	// 0..1 over its life
+			if (age <= 0 || age >= 1) {
+				m.scale = 0;
+				continue;
+			}
+			// Balloons out fast, then slows: ease-out on the radius.
+			m.scale = fireball.radius * (1 - Math.pow(1 - age, 3));
+			// Starts small but never a dot.
+			m.scale = Math.max(m.scale, 0.15 * fireball.radius);
+			// Cools from hot white to green over its life, and fades out more slowly,
+			// so it stays bright early on and is a dim green glow by the end.
+			const heat = Math.pow(1 - age, 1.5);
+			const opacity = Math.pow(1 - age, 0.7);
+			const color = FIREBALL_HOT.map((hot, k) => Math.round(FIREBALL_COOL[k] + (hot - FIREBALL_COOL[k]) * heat));
+			m.fill = `rgba(${color.join(', ')}, ${(FIREBALL_ALPHA * opacity).toFixed(3)})`;
+		}
 
 		const shardFade = Math.max(0, 1 - this.time / SHARD_LIFE);
 		for (const shard of this.#shards) {
@@ -119,12 +178,18 @@ export class Explosion {
 	}
 
 	get done() {
-		return this.time >= SHARD_LIFE;
+		return this.time >= SHARD_LIFE
+			&& this.#fireballs.every((f) => this.time >= f.delay + f.life);
 	}
 
 	/** Models to draw this frame (sparks that have burnt out are left off). */
 	get models() {
 		const models = [];
+		for (const fireball of this.#fireballs) {
+			if (fireball.model.scale > 0) {
+				models.push(fireball.model);
+			}
+		}
 		if (this.time < SHARD_LIFE) {
 			for (const shard of this.#shards) {
 				models.push(shard.model);

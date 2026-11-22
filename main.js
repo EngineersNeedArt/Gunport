@@ -8,8 +8,12 @@ import { coordinateFrame, loadModel, loadJSON, modelFromJSON, drawModels } from 
 import { Fighter } from './fighter.js';
 import { Guns } from './guns.js';
 import { Explosion } from './explosion.js';
+import { Cannon } from './cannon.js';
+import { EnemyFire } from './enemyfire.js';
+import { Sound } from './sound.js';
 
 const PHOSPHOR_GREEN = '#33ff66';
+const WARNING_ORANGE = '#ffaa33';
 
 const canvas = document.getElementById('screen');
 const ctx = canvas.getContext('2d');
@@ -20,18 +24,40 @@ const camera = new Camera();
 const starfield = new Starfield(400);
 const turret = new Turret();
 const fps = new FPS();
+const sound = new Sound();
 
 // --- Models -----------------------------------------------------------------
 
 // Things fixed to the gunner's seat.
-const cockpitFrame = coordinateFrame(() => turret.cockpitMatrix());
+const cockpitFrame = coordinateFrame(() => shaken(turret.cockpitMatrix()));
 const cockpitModels = [];
 
-// Things out in space, seen through the turret's aim (ship hull later, fighters now).
+// Things out in space, seen through the turret's aim.
 const worldFrame = coordinateFrame(() => turret.viewMatrix());
 const worldModels = [];
 const fighters = [];
 const guns = new Guns(worldFrame);
+const enemyFire = new EnemyFire(worldFrame);
+
+// Sounds for shots (the rest are in updateCombat and damageShip). A little random
+// variation in speed (and so pitch) keeps rapid fire from sounding mechanical.
+const vary = (amount) => 1 + (Math.random() * 2 - 1) * amount;
+guns.onFire = (pair) => {
+	cannon?.recoil(pair);
+	sound.play('laser', { volume: 0.18, rate: vary(0.05) });	// fires ~7 pairs/s, so copies overlap
+};
+enemyFire.onFire = (position) => sound.play('enemyLaser', { position, volume: 0.9, rate: vary(0.06) });
+
+// The laser cannon overhead: turns and tilts with the aim, and its barrel tips
+// are where the bolts come from.
+const gunFrame = coordinateFrame(() => shaken(turret.gunMatrix()));
+let cannon = null;
+Promise.all([loadJSON('models/cannon-body.json'), loadJSON('models/cannon-barrel.json')])
+	.then(([body, barrel]) => {
+		cannon = new Cannon(body, barrel, gunFrame);
+		guns.muzzlePairs = cannon.muzzlePairs;
+	})
+	.catch((error) => console.error(error));
 
 loadModel('models/bezel.json', cockpitFrame)
 	.then((model) => cockpitModels.push(model))
@@ -48,17 +74,26 @@ let respawnTimer = -1;		// counting down while waiting to respawn; -1 = not wait
 loadJSON('models/fighter.json')
 	.then((json) => {
 		fighterJSON = json;
-		spawnFighter(turret.yaw);	// the first one appears where you're looking
+		spawnFighter(turret.yaw, turret.pitch + 15 * Math.PI / 180);	// the first one appears where you're looking
 	})
 	.catch((error) => console.error(error));
 
-function spawnFighter(heading) {
-	fighters.push(new Fighter(modelFromJSON(fighterJSON, worldFrame), heading));
+function spawnFighter(heading, elevation) {
+	fighters.push(new Fighter(modelFromJSON(fighterJSON, worldFrame), heading, elevation));
 }
 
 function updateCombat(dt) {
+	damageShip(enemyFire.update(dt, fighters));
+
 	for (const fighter of guns.hitTest(fighters)) {
-		if (fighter.hit()) {
+		if (fighter.destroyed) {
+			continue;	// two bolts in the same frame: it's already gone
+		}
+		if (!fighter.hit()) {
+			sound.play('clank', { position: fighter.position, volume: 0.7, rate: vary(0.1) });
+		} else {
+			// Explosions carry: half volume at 50 units (other sounds: 15).
+			sound.play('explosion', { position: fighter.position, rate: vary(0.1), falloff: 50 });
 			fighters.splice(fighters.indexOf(fighter), 1);
 			explosions.push(new Explosion(fighter.model, fighter.velocity, worldFrame));
 			kills += 1;
@@ -78,10 +113,85 @@ function updateCombat(dt) {
 	if (respawnTimer >= 0) {
 		respawnTimer -= dt;
 		if (respawnTimer < 0 && fighterJSON) {
-			spawnFighter(Math.random() * 2 * Math.PI);	// anywhere: follow the arrow
+			// Anywhere in the turret's reach (follow the arrow).
+			const spread = (limit) => (Math.random() * 2 - 1) * limit;
+			spawnFighter(spread(Turret.PAN_LIMIT * 0.8), spread(Turret.TILT_LIMIT * 0.6));
 		}
 	}
 }
+
+// --- Our ship ---------------------------------------------------------------
+// Enemy bolts that reach the ship damage the hull. Each hit flashes the screen
+// and jolts the cockpit (bezel and cannon); at zero the ship is lost.
+
+const HULL_MAX = 100;
+const HIT_DAMAGE = 5;			// hull points per enemy bolt (20 hits to lose the ship)
+const SHAKE_TIME = 0.35;		// seconds a hit's jolt lasts
+const SHAKE_SIZE = 0.05;		// how far the cockpit jolts (world units; the bezel is 2 out)
+const FLASH_TIME = 0.25;		// seconds a hit's flash lasts
+const LOW_HULL = 30;			// at or below this, the hull readout turns orange
+
+let hull = HULL_MAX;
+let shipLost = false;
+let shakeTime = 0;
+let flashTime = 0;
+let shakeOffset = [0, 0];		// this frame's jolt, shared by everything in the cockpit
+
+function damageShip(hits) {
+	if (hits === 0 || shipLost) {
+		return;
+	}
+	hull = Math.max(0, hull - hits * HIT_DAMAGE);
+	shakeTime = SHAKE_TIME;
+	flashTime = FLASH_TIME;
+	sound.play('hullHit', { volume: 0.9, rate: vary(0.08) });
+	if (hull === 0) {
+		shipLost = true;
+		sound.play('explosion', { volume: 1, rate: 0.6 });	// slowed down: deeper, longer
+		updateInput();	// lets go of the trigger
+	}
+}
+
+function restart() {
+	hull = HULL_MAX;
+	kills = 0;
+	shipLost = false;
+	enemyFire.clear();
+	updateInput();
+}
+
+function updateShip(dt) {
+	shakeTime = Math.max(0, shakeTime - dt);
+	flashTime = Math.max(0, flashTime - dt);
+	const size = SHAKE_SIZE * shakeTime / SHAKE_TIME;
+	shakeOffset = [(Math.random() * 2 - 1) * size, (Math.random() * 2 - 1) * size];
+}
+
+// A cockpit matrix with this frame's jolt added (in screen-mapped space, last).
+function shaken(matrix) {
+	if (shakeTime > 0) {
+		matrix.translate(shakeOffset[0], shakeOffset[1], 0);
+	}
+	return matrix;
+}
+
+// --- Intro screen -----------------------------------------------------------
+// The game waits behind the intro until it's dismissed with a click or a key.
+// That click or key press is also what lets the browser start playing sound.
+
+let started = false;
+const intro = document.getElementById('intro');
+
+function startGame() {
+	if (started) {
+		return;
+	}
+	started = true;
+	intro.classList.add('hidden');
+	sound.start();
+}
+
+intro.addEventListener('click', startGame);
 
 // --- Input ------------------------------------------------------------------
 
@@ -134,12 +244,16 @@ function updateInput() {
 	turret.pitchInput = pitch;
 
 	// Trigger: Space, or the main mouse button held down over the game.
-	guns.firing = keys.has('Space') || mouseButtonDown;
+	guns.firing = !shipLost && (keys.has('Space') || mouseButtonDown);
 }
 
 let mouseButtonDown = false;
 
 canvas.addEventListener('mousedown', (e) => {
+	if (e.button === 0 && shipLost) {
+		restart();
+		return;
+	}
 	if (e.button === 0) {
 		mouseButtonDown = true;
 		updateInput();
@@ -158,11 +272,21 @@ document.addEventListener('keydown', (e) => {
 	if (e.code.startsWith('Arrow') || e.code === 'Space') {
 		e.preventDefault();
 	}
+	if (!started) {
+		startGame();	// any key dismisses the intro (and does nothing else)
+		return;
+	}
+	if (e.code === 'KeyN' && !e.repeat) {
+		sound.toggle();
+	}
 	if (e.code === 'KeyB' && !e.repeat) {
 		starfield.motionBlur = !starfield.motionBlur;
 	}
 	if (e.code === 'KeyM' && !e.repeat) {
 		mouse.enabled = !mouse.enabled;
+	}
+	if (e.code === 'Enter' && shipLost) {
+		restart();
 	}
 	keys.add(e.code);
 	updateInput();
@@ -301,14 +425,51 @@ function drawOffscreenArrow(worldPosition) {
 }
 
 function drawHUD(frameRate) {
-	const heading = Math.round(turret.yaw * 180 / Math.PI) % 360;
-	const elevation = Math.round(turret.pitch * 180 / Math.PI);
+	// Pan and tilt from straight out, e.g. "PAN R23°  TILT D05°".
+	const angle = (radians, negative, positive) => {
+		const degrees = Math.round(radians * 180 / Math.PI);
+		const side = degrees < 0 ? negative : degrees > 0 ? positive : ' ';
+		return `${side}${String(Math.abs(degrees)).padStart(2, '0')}°`;
+	};
 	ctx.font = '16px ui-monospace, Menlo, monospace';
 	ctx.fillStyle = PHOSPHOR_GREEN;
 	ctx.textAlign = 'left';
-	ctx.fillText(`HDG ${String(heading).padStart(3, '0')}°  ELEV ${String(elevation).padStart(2, '0')}°   KILLS ${kills}`, 16, canvas.height - 16);
+	const status = `PAN ${angle(turret.yaw, 'L', 'R')}  TILT ${angle(turret.pitch, 'D', 'U')}   KILLS ${kills}   `;
+	const hullText = `HULL ${String(hull).padStart(3, ' ')}%`;
+	const controls = `FIRE [SPACE/CLICK]   SOUND ${sound.enabled ? 'ON ' : 'OFF'} [N]   MOUSE ${mouse.enabled ? 'ON ' : 'OFF'} [M]   BLUR ${starfield.motionBlur ? 'ON ' : 'OFF'} [B]   ${frameRate} FPS`;
+	const bottom = canvas.height - 16;
+	ctx.fillText(status, 16, bottom);
+	ctx.fillStyle = hull <= LOW_HULL ? WARNING_ORANGE : PHOSPHOR_GREEN;
+	ctx.fillText(hullText, 16 + ctx.measureText(status).width, bottom);
+	ctx.fillStyle = PHOSPHOR_GREEN;
+	// Controls on the right; up a line if the window is too narrow for both.
+	const leftWidth = ctx.measureText(status + hullText).width;
+	const fits = 16 + leftWidth + 40 + ctx.measureText(controls).width + 16 <= canvas.width;
 	ctx.textAlign = 'right';
-	ctx.fillText(`FIRE [SPACE/CLICK]   MOUSE ${mouse.enabled ? 'ON ' : 'OFF'} [M]   BLUR ${starfield.motionBlur ? 'ON ' : 'OFF'} [B]   ${frameRate} FPS`, canvas.width - 16, canvas.height - 16);
+	ctx.fillText(controls, canvas.width - 16, fits ? bottom : bottom - 24);
+}
+
+// A hit: a quick green-white wash over everything.
+function drawHitFlash() {
+	if (flashTime > 0) {
+		ctx.fillStyle = `rgba(170, 255, 180, ${(0.3 * flashTime / FLASH_TIME).toFixed(3)})`;
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+	}
+}
+
+function drawShipLost() {
+	if (!shipLost) {
+		return;
+	}
+	ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+	ctx.fillRect(0, 0, canvas.width, canvas.height);
+	ctx.textAlign = 'center';
+	ctx.fillStyle = WARNING_ORANGE;
+	ctx.font = '40px ui-monospace, Menlo, monospace';
+	ctx.fillText('SHIP DESTROYED', canvas.width / 2, canvas.height / 2 - 10);
+	ctx.fillStyle = PHOSPHOR_GREEN;
+	ctx.font = '18px ui-monospace, Menlo, monospace';
+	ctx.fillText(`KILLS ${kills}   —   PRESS ENTER OR CLICK TO FLY AGAIN`, canvas.width / 2, canvas.height / 2 + 30);
 }
 
 // --- Main loop --------------------------------------------------------------
@@ -321,12 +482,18 @@ function frame(now) {
 	lastTime = now;
 
 	fps.startFrame();
-	turret.update(dt);
-	for (const fighter of fighters) {
-		fighter.update(dt);
+	if (started) {
+		turret.update(dt);
+		for (const fighter of fighters) {
+			fighter.update(dt);
+		}
+		guns.update(dt, turret);
+		cannon?.update(dt);
+		updateCombat(dt);
+		updateShip(dt);
+		sound.setListener(turret.axes());
+		sound.updateEngines(fighters);
 	}
-	guns.update(dt, turret);
-	updateCombat(dt);
 
 	ctx.fillStyle = 'black';
 	ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -340,16 +507,22 @@ function frame(now) {
 		...fighters.map((fighter) => fighter.model),
 		...explosions.flatMap((explosion) => explosion.models),
 		...guns.models,
+		...enemyFire.models,
 	]);
+	if (cannon) {
+		drawModels(ctx, camera, cannon.models);
+	}
 	drawModels(ctx, camera, cockpitModels);
 	drawReticle();
 	for (const fighter of fighters) {
 		drawOffscreenArrow(fighter.position);
 	}
 	drawMouseMarker();
+	drawHitFlash();
 
 	fps.endFrame();
 	drawHUD(fps.fps());
+	drawShipLost();
 
 	requestAnimationFrame(frame);
 }
